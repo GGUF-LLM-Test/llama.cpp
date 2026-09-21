@@ -3,6 +3,7 @@ import requests
 import time
 import random
 import math
+import threading
 
 from openai import OpenAI
 from utils import *
@@ -732,4 +733,65 @@ def test_oai_completions_echo_logprobs_stream():
     })
     chunks = list(res)
     assert len(chunks) > 0
+
+
+def test_oai_completions_echo_logprobs_parallel():
+    # regression test: with n_parallel > 1, the per-slot prompt chunking in update_slots()
+    # bounds each echo slot by llama_n_outputs_max(ctx) (the *total* output capacity), so
+    # two concurrent echo+logprobs tasks decoded in the same batch exceeded the capacity
+    # and hard-aborted the server with GGML_ASSERT(n_outputs_max <= cparams.n_outputs_max).
+    # The server now raises n_outputs_max to n_batch lazily on the first echo+logprobs task.
+    global server
+    server.start()
+
+    prompt = "Once upon a time" + " there was a tiny story about" * 40  # ~300 tokens, > n_batch
+
+    n_threads = 2  # == server.n_slots
+    barrier = threading.Barrier(n_threads)
+    results = [None] * n_threads
+    errors = []
+
+    def worker(i):
+        try:
+            barrier.wait(timeout=DEFAULT_REQUEST_TIMEOUT)
+            results[i] = server.make_request("POST", "/v1/completions", data={
+                "prompt": prompt,
+                "echo": True,
+                "logprobs": 3,
+                "max_tokens": 1,
+                "temperature": 0.0,
+            })
+        except Exception as e:
+            errors.append(e)
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n_threads)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(timeout=DEFAULT_REQUEST_TIMEOUT)
+
+    assert not errors, errors
+
+    for res in results:
+        assert res is not None
+        assert res.status_code == 200
+        choice = res.body["choices"][0]
+        lp = choice["logprobs"]
+        assert lp is not None
+        tokens = lp["tokens"]
+        assert len(tokens) > 1
+        assert len(lp["token_logprobs"]) == len(tokens)
+        assert len(lp["top_logprobs"]) == len(tokens)
+        assert lp["token_logprobs"][0] is None
+        for i in range(1, len(tokens)):
+            assert lp["token_logprobs"][i] is not None
+            assert math.isfinite(lp["token_logprobs"][i])
+
+    # the server must still be alive and serving after the parallel echo batch
+    res = server.make_request("POST", "/v1/completions", data={
+        "prompt": "The capital of France is",
+        "max_tokens": 4,
+        "temperature": 0.0,
+    })
+    assert res.status_code == 200
 

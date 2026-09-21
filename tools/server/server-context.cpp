@@ -2412,6 +2412,22 @@ private:
 
                     const int id_task = task.id;
 
+                    // echo=true with logprobs needs output-logits capacity for (up to) the
+                    // whole prompt batch. Instead of paying that memory at startup for every
+                    // server, raise the capacity lazily, on the first task that needs it.
+                    // Once n_outputs_max >= n_batch, the batch-wide token limit (batch.size()
+                    // < n_batch) guarantees the per-batch output sum stays within capacity,
+                    // no matter how many echo slots are decoded together.
+                    if (task.params.echo && task.params.sampling.n_probs > 0) {
+                        const int32_t n_outputs_needed = std::max<int32_t>(1, params_base.n_batch);
+                        if ((int32_t) llama_n_outputs_max(ctx_tgt) < n_outputs_needed &&
+                                !llama_set_n_outputs_max(ctx_tgt, n_outputs_needed)) {
+                            SRV_ERR("echo with logprobs is not supported when backend sampling is enabled, id_task = %d\n", id_task);
+                            send_error(task, "echo with logprobs is not supported when backend sampling is enabled", ERROR_TYPE_SERVER);
+                            break;
+                        }
+                    }
+
                     server_slot * slot = get_available_slot(task);
 
                     //

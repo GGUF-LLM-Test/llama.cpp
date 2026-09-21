@@ -1217,6 +1217,35 @@ void llama_context::set_warmup(bool value) {
     //sched_need_reserve = true;
 }
 
+bool llama_context::set_n_outputs_max(uint32_t n_outputs_max) {
+    LLAMA_LOG_DEBUG("%s: n_outputs_max = %u\n", __func__, n_outputs_max);
+
+    if (n_outputs_max <= cparams.n_outputs_max) {
+        // never shrink - the current capacity already covers the request
+        return true;
+    }
+
+    if (!sampling.samplers.empty()) {
+        // backend samplers were initialized with buffers sized for the current capacity
+        // (see set_sampler) - changing it after the fact is not supported
+        LLAMA_LOG_ERROR("%s: cannot change n_outputs_max while backend samplers are registered\n", __func__);
+        return false;
+    }
+
+    cparams.n_outputs_max = n_outputs_max;
+
+    // note: n_outputs_max_per_seq is intentionally left unchanged - it only constrains
+    // sequences with registered backend samplers, which are rejected above
+
+    // the worst-case graphs are reserved for min(n_tokens, cparams.n_outputs_max) output
+    // rows (see sched_reserve) - re-reserve with the new capacity on the next decode
+    sched_need_reserve = true;
+
+    LLAMA_LOG_INFO("%s: n_outputs_max raised to %u, graphs will re-reserve on next decode\n", __func__, cparams.n_outputs_max);
+
+    return true;
+}
+
 bool llama_context::set_sampler(llama_seq_id seq_id, llama_sampler * sampler) {
     if (!sampler && sampling.samplers.count(seq_id) == 0) {
         return true;
@@ -3803,6 +3832,10 @@ uint32_t llama_n_rs_seq(const llama_context * ctx) {
 
 uint32_t llama_n_outputs_max(const llama_context * ctx) {
     return ctx->get_cparams().n_outputs_max;
+}
+
+bool llama_set_n_outputs_max(llama_context * ctx, uint32_t n_outputs_max) {
+    return ctx->set_n_outputs_max(n_outputs_max);
 }
 
 const llama_model * llama_get_model(const llama_context * ctx) {

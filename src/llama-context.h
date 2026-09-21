@@ -253,6 +253,12 @@ public:
 
     bool set_sampler(llama_seq_id seq_id, llama_sampler * sampler);
 
+    // Raise the output-capacity limit (n_outputs_max), never shrink it. The worst-case
+    // graphs and output buffers grow lazily via sched_need_reserve on the next decode.
+    // Returns false when backend samplers are registered (their buffers are sized at
+    // registration time and cannot follow a capacity change).
+    bool set_n_outputs_max(uint32_t n_outputs_max);
+
 private:
     llm_graph_params graph_params(
                         llm_graph_result * res,

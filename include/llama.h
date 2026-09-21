@@ -572,6 +572,12 @@ extern "C" {
     LLAMA_API uint32_t llama_n_rs_seq   (const struct llama_context * ctx);
     LLAMA_API uint32_t llama_n_outputs_max(const struct llama_context * ctx);
 
+    // Raise the output-logits capacity limit of the context (never shrinks it).
+    // The larger worst-case graphs and output buffers are reserved lazily on the next
+    // decode. Returns false if the change cannot be applied (e.g. backend samplers are
+    // registered - their buffers are sized at registration time).
+    LLAMA_API bool llama_set_n_outputs_max(struct llama_context * ctx, uint32_t n_outputs_max);
+
     DEPRECATED(LLAMA_API int32_t llama_n_ctx_train(const struct llama_model * model), "use llama_model_n_ctx_train instead");
     DEPRECATED(LLAMA_API int32_t llama_n_embd     (const struct llama_model * model), "use llama_model_n_embd instead");
     DEPRECATED(LLAMA_API int32_t llama_n_layer    (const struct llama_model * model), "use llama_model_n_layer instead");
